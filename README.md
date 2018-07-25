@@ -1,8 +1,18 @@
 # Workbench-Android
 
+__Only works with samsung GT-I9195__
+
 Manages the installation of a new Android OS (Lineage) after doing steps to securely delete bit per bit any data of the last owner.
 
 Execute `python script` to start the process.
+
+- [x] 1 Boot the device into bootloader.
+- [x] 2 Flash recovery with `heimdall`.
+- [ ] 3 Get device info through usb protocol.
+- [ ] 4 Reboot into recovery.
+- [x] 5 Get device information.
+- [ ] 6 Wipe user data.
+- [ ] 7 Flash new rom.
 
 ## Contents of this project.
 

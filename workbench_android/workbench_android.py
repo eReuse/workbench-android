@@ -62,12 +62,49 @@ class WorkbenchAndroid:
         for serial_number in self.list_devices():
             self.connect_device(serial_number)
             self.adb.RebootBootloader()
+            self.adb.Close()
+
+    def set_recovery(self):
+        """Reboot all devices detected into Recovery mode."""
+        for serial_number in self.list_devices():
+            self.connect_device(serial_number)
+            self.adb.RebootBootloader()
+            self.adb.Close()
 
     def export(self, serial_number):
-        pass
+        """Export device information of given `serial_number`.
+
+        print(device.Shell('getprop'))
+        print(device.Shell('getprop ro.product.model'))
+
+        model = device.Shell('getprop ro.product.model').strip()
+
+           and usb.idProduct Y, flashing the recovery
+        get device data
+        serial number, model, mnaufacturer
+        can we get imei / meid?
+        can we get battery status?
+        android version
+
+        print(device.Shell('getprop'))
+        print(device.Shell('getprop ro.product.model'))
+        Args:
+            serial_number (str): Serial number of the device.
+        """
+        outputs = self.shell(
+            [
+                'getprop ro.product.model',
+                'getprop ro.product.brand',
+            ],
+            target=serial_number
+        )
+        return dict(
+            model=outputs[0],
+            brand=outputs[1],
+        )
 
     def shell(self, command, target=None):
-        """Automatically start a comunication with the device serial number.
+        """Automatically start a communication with the device serial number.
 
         Args:
             command (str or list): A command or a list of commands to
@@ -82,7 +119,7 @@ class WorkbenchAndroid:
         if isinstance(command, str):
             output = self.adb.Shell(command).strip()
         elif isinstance(command, list):
-            output = [self.adb.Shell(execute.strip()) for execute in command]
+            output = [self.adb.Shell(execute).strip() for execute in command]
         else:
             raise NotImplementedError(
                 'You should send a `str` or `list` command/s.'
