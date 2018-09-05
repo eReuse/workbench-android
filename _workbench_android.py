@@ -3,9 +3,6 @@ import logging
 import os.path as op
 import subprocess
 import traceback
-from adb import adb_commands
-from adb import sign_m2crypto
-from usb1 import USBError
 
 
 class WorkbenchAndroid:
