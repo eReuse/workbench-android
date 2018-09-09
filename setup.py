@@ -16,7 +16,8 @@ setup(
     install_requires=[
         'blessed',
         'colorama',
-        'click >= 6.0'
+        'click >= 6.0',
+        'ereuse-utils[cli]>=0.4.0b2'
     ],
     setup_requires=[
         'pytest-runner'
@@ -39,7 +40,7 @@ setup(
     py_modules=['devicetag'],
     entry_points={
         'console_scripts': [
-            'dt = workbench_android.main:main',
+            'wa = workbench_android.main:main',
         ],
     },
 )

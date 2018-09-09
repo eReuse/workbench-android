@@ -1,11 +1,14 @@
 import collections
+import pathlib
+import subprocess
 from contextlib import suppress
 
 import blessed
 import click
 import colorama
+from ereuse_utils import cli
 
-from workbench_android.mobile import Mobile, NoDevice
+from workbench_android.mobile import Fastboot, Mobile, NoDevice
 
 
 def manual_spinner():
@@ -22,15 +25,24 @@ UPDATE_SPEED = 0.3
 
 
 @click.command()
-def main():
-    """
+@click.argument('res', type=cli.Path(exists=True, dir_okay=True))
+def main(res: pathlib.Path):
+    """Prepares Android smartphones for reuse.
+
     Obtains info of Android devices, jailbreaks them,
     erases them, and installs a custom free community-picked
     Android distribution.
+
+    This software requires a path pointing to a RES folder.
     """
     term = blessed.Terminal()
     mobiles = collections.deque()
     spinner = manual_spinner()
+    fastboot = Fastboot(res)
+    fastboot.run()
+    # Instantiate adb
+    subprocess.run(('adb', 'start-server'))
+
     with term.fullscreen(), term.cbreak():
         title = 'eReuse.org Workbench Android. Detecting Androids'
         print(title)
@@ -40,15 +52,19 @@ def main():
             with term.location(len(title) + 1, 0):
                 print(spin_step)
 
-            # Is there a new mobile?
+            # Is there a new mobile in fastboot?
+            with term.location(0, 3):
+                print(fastboot.state)
+
+            # Is there a new mobile (in recovery?)
             with suppress(NoDevice):
                 mobiles.append({
-                    'mobile': Mobile.factory_from_bootloader(),
+                    'mobile': Mobile.factory_from_recovery(res, mobiles),
                     'last_state': None,
                     'bar': None
                 })
             # Update mobiles
-            for i, info in enumerate(mobiles, start=3):
+            for i, info in enumerate(mobiles, start=4):
                 state, increment = info['mobile'].status()
                 if info['last_state'] == state:
                     if state != next(reversed(Mobile.States)):  # Last state
@@ -69,3 +85,4 @@ def main():
                                                             label=str(info['mobile']).ljust(SPACE))
                             info['bar'].__enter__()
                 info['last_state'] = state
+    subprocess.run(('adb', 'kill-server'))

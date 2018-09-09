@@ -1,6 +1,6 @@
 import subprocess
 from contextlib import suppress
-from typing import TextIO
+from typing import TextIO, Any
 
 
 class ProgressiveCmd:
@@ -18,7 +18,7 @@ class ProgressiveCmd:
     DECIMALS = 5
     INT = 3
 
-    def __init__(self, *cmd: str,
+    def __init__(self, *cmd: Any,
                  stderr=subprocess.DEVNULL,
                  stdout=subprocess.DEVNULL,
                  number_chars: int = INT,
@@ -35,7 +35,7 @@ class ProgressiveCmd:
                      The percentage should be between those
                      characters.
         """
-        self.cmd = cmd
+        self.cmd = tuple(str(c) for c in cmd)
         self.read = read
         self.step = 0
         self.number_chars = number_chars
