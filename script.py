@@ -1,90 +1,55 @@
-import json
-import os
-import time
-import logging
-import conf_log
-from workbench_android import workbench_android
+import subprocess
 
 
-DEBUG_LEVEL = logging.DEBUG
-DATA_FOLDER = os.path.join(os.getcwd(), 'devices_data')
+def get_data_partition(_sn):
+    """Get data partiton.
+    Args:
+        _sn (str): Serial number.
+    Returns:
+        str: Partition path.
+        """
 
+    command = 'adb -s {serial_number} shell mount' \
+        .format(serial_number=_sn)
 
-def bootloader_flash():
-    """Flash device"""
-    while not wba.devices_on_bootload():
-        logger.warning(
-            'Please, reboot device/s to bootloader.\n'
-            'Press enter to try again or type \'s\' or \'Skip\' to continue.'
-        )
-        if input().lower().startswith("s"):
+    p = subprocess.Popen(
+        command.split(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True
+    )
+    while True:
+        sn_line = p.stdout.readline()
+        if not sn_line:
             break
 
-        wba.set_bootloader()  # Help for the user to set them on bootloader.
-
-    else:
-
-        while wba.devices_on_bootload():
-            flashed = wba.flash_device()
-            logger.debug(
-                'Last results == {}\n'
-                'Waiting 1 second before to retry.'.format(flashed)
-            )
-            time.sleep(1)
-        else:
-            logger.info('All devices has been flashed.')
+        if '/data' in sn_line:
+            return sn_line.split()[0]
 
 
-def get_devices_information():
-    """Get information for every device connected on ADB.
+def erase_partition(partition, _sn):
+    """Get data partiton.
+    Args:
+        _sn (str): Serial number.
+    Returns:
+        str: Partition path.
+        """
 
-    Creates a folder on r'.' called `devices_data`.
+    command_first = 'adb -s {serial_number}' \
+        .format(serial_number=_sn)
 
-    """
-    devices = wba.list_devices()
-    while not devices:
-        logger.warning(
-            'Devices not detected.\n'
-            'Press enter to try again or type \'s\' or \'Skip\' to continue.'
-        )
-        if input().lower().startswith("s"):
-            exit(1)
+    command_end = 'shell dd if=/dev/zero of={partition}' \
+        .format(partition=partition)
 
-        devices = wba.list_devices()
-
-    for _serial_number in devices:
-        yield _serial_number, wba.export(_serial_number)
+    p = subprocess.Popen(
+        command_first.split() + command_end.split(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True
+    )
 
 
 if __name__ == '__main__':
-    conf_log.configure(DEBUG_LEVEL)
-    logger = logging.getLogger("Workbench-android")
-
-    # Workbench-Android call.
-    wba = workbench_android.WorkbenchAndroid()
-
-    # 1. boot to bootloader (usually manually touching buttons)
-    wba.set_bootloader()
-
-    # @TODO: 2. get device info through usb protocol.
-
-    # 3. execute `heimdall` or similar depending of usb.idVendor X
-    bootloader_flash()
-
-    # 4. Enter into recovery.
-    wba.set_recovery()
-
-    # 5. Get device information.
-    for serial_number, export in get_devices_information():
-
-        file_path = os.path.join(DATA_FOLDER, '{}.json'.format(serial_number))
-        if not os.path.exists(DATA_FOLDER):
-            os.mkdir(DATA_FOLDER)
-
-        with open(file_path, 'w') as _file:
-            json.dump(export, _file,  indent=4, sort_keys=True)
-
-    # 6. wipe
-
-    # 7. install custom OS
-    # have fun!
+    serial_number = "21f4c3ce"
+    partition = get_data_partition(serial_number)
+    erased = erase_partition(partition, serial_number)
