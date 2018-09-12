@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 with open('README.md') as f:
     long_description = f.read()
@@ -17,7 +17,7 @@ setup(
         'blessed',
         'colorama',
         'click >= 6.0',
-        'ereuse-utils[cli]>=0.4.0b2'
+        'ereuse-utils[cli, naming]>=0.4.0b3'
     ],
     setup_requires=[
         'pytest-runner'

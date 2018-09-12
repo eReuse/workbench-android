@@ -6,7 +6,6 @@ from contextlib import suppress
 import blessed
 import click
 import colorama
-from ereuse_utils import cli
 
 from workbench_android.mobile import Fastboot, Mobile, NoDevice
 
@@ -24,9 +23,9 @@ UPDATE_SPEED = 0.3
 """Seconds that the main thread takes to cycle between updates."""
 
 
-@click.command()
-@click.argument('res', type=cli.Path(exists=True, dir_okay=True))
-def main(res: pathlib.Path):
+# @click.command()
+# @click.argument('res', type=cli.Path(exists=True, dir_okay=True))
+def main(res: pathlib.Path, jsons: pathlib.Path):
     """Prepares Android smartphones for reuse.
 
     Obtains info of Android devices, jailbreaks them,
@@ -39,7 +38,7 @@ def main(res: pathlib.Path):
     mobiles = collections.deque()
     spinner = manual_spinner()
     fastboot = Fastboot(res)
-    fastboot.run()
+    fastboot.start()
     # Instantiate adb
     subprocess.run(('adb', 'start-server'))
 
@@ -52,21 +51,20 @@ def main(res: pathlib.Path):
             with term.location(len(title) + 1, 0):
                 print(spin_step)
 
-            # Is there a new mobile in fastboot?
-            with term.location(0, 3):
-                print(fastboot.state)
-
             # Is there a new mobile (in recovery?)
             with suppress(NoDevice):
                 mobiles.append({
-                    'mobile': Mobile.factory_from_recovery(res, mobiles),
+                    'mobile': Mobile.factory_from_recovery(res, jsons),
                     'last_state': None,
                     'bar': None
                 })
             # Update mobiles
             for i, info in enumerate(mobiles, start=4):
-                state, increment = info['mobile'].status()
-                if info['last_state'] == state:
+                state, increment, error = info['mobile'].status()
+                if error:
+                    with term.location(0, i):
+                        print('{}{}{}'.format(colorama.Fore.RED, error, colorama.Style.RESET_ALL))
+                elif info['last_state'] == state:
                     if state != next(reversed(Mobile.States)):  # Last state
                         if increment:
                             with term.location(0, i):
@@ -85,4 +83,7 @@ def main(res: pathlib.Path):
                                                             label=str(info['mobile']).ljust(SPACE))
                             info['bar'].__enter__()
                 info['last_state'] = state
-    subprocess.run(('adb', 'kill-server'))
+    # subprocess.run(('adb', 'kill-server'))
+
+
+main(pathlib.Path.home() / 'Documents' / 'wa', pathlib.Path.home() / 'Documents' / 'wa-jsons')
