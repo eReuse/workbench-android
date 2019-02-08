@@ -8,6 +8,7 @@ from enum import Enum
 from time import sleep
 from typing import Set, Tuple, Union
 
+import ereuse_utils
 from ereuse_utils import cmd
 from ereuse_utils.naming import Naming
 
@@ -47,7 +48,7 @@ class Mobile(threading.Thread):
         self.dir = res / self.model
         self.events = []
         super().__init__(daemon=True)
-        hid = Naming.hid(self.manufacturer, self.serial_number, self.model)
+        hid = Naming.hid('Smartphone', self.manufacturer, self.model, self.serial_number)
         self.json_path = jsons / (hid + '.json')
         self.save_json()
         self._state_iter = iter(self.States)
@@ -165,13 +166,19 @@ class Mobile(threading.Thread):
 
     def erase_data_partition(self):
         shell = 'adb', '-s', self.serial_number, 'shell'
+        i = 1
         while True:
             try:
+                sleep(1)
+                cmd.run(*shell, 'recovery', '--set_filesystem_encryption=off')
+                cmd.run(*shell, 'twrp', 'wipe', 'data')
+                sleep(1)
                 res = cmd.run(*shell, 'mount')
                 part = next(line.split()[0] for line in res.stdout.splitlines() if '/data' in line)
-            except (StopIteration, subprocess.CalledProcessError):
-                self._error = 'Data partition broken. Do: Recovery > Wipe > Format and wait.'
-                sleep(2)
+            except (StopIteration, subprocess.CalledProcessError) as e:
+                i += 1
+                self._error = 'Data partition broken. Wiping again... ({}) ({})'.format(i, e)
+                sleep(5)
             else:
                 self._error = None
                 break
@@ -184,6 +191,7 @@ class Mobile(threading.Thread):
         }
         # todo check that dd fulfilled the entire partition
         cmd.run(*shell, 'dd', 'if=/dev/zero', 'of={}'.format(part), check=False)
+        cmd.run(*shell, 'twrp', 'wipe', 'data')
         erasure['endTime'] = datetime.datetime.now(datetime.timezone.utc)
         erasure['steps'].append({
             'type': 'StepRandom',
@@ -205,7 +213,7 @@ class Mobile(threading.Thread):
                 },
                 'closed': self.closed,
                 'events': self.events
-            }, f)
+            }, f, cls=ereuse_utils.JSONEncoder, indent=2, sort_keys=True)
 
     def __hash__(self) -> int:
         return self.serial_number.__hash__()

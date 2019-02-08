@@ -17,7 +17,7 @@ setup(
         'blessed',
         'colorama',
         'click >= 6.0',
-        'ereuse-utils[cli, naming]>=0.4.0b3'
+        'ereuse-utils[cli, naming]>=0.4.0b20'
     ],
     setup_requires=[
         'pytest-runner'
