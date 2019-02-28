@@ -9,6 +9,13 @@ import colorama
 
 from workbench_android.mobile import Fastboot, Mobile, NoDevice
 
+@click.command()
+
+
+
+
+
+
 
 def manual_spinner():
     while True:

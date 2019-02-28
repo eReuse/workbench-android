@@ -1,18 +1,162 @@
 import datetime
 import json
+import math
 import pathlib
 import subprocess
 import threading
 from contextlib import suppress
 from enum import Enum
 from time import sleep
-from typing import Set, Tuple, Union
+from typing import Dict, Set, Tuple, Union
 
 import ereuse_utils
-from ereuse_utils import cmd
+import yaml
+from ereuse_utils import cli, cmd, text
 from ereuse_utils.naming import Naming
 
-from workbench_android.progressive_cmd import ProgressiveCmd
+
+class Adb:
+    def __init__(self, serial_number: str) -> None:
+        self.serial_number = serial_number
+        self.adb = 'adb', '-s', self.serial_number
+        self.sh = self.adb + 'shell',
+        self.dumpsys = self.shell('dumpsys')
+
+    def prop(self, prop: str) -> str:
+        return cmd.run(*self.sh, 'getprop', prop).stdout.strip()
+
+    def shell(self, *params) -> str:
+        return cmd.run(*self.sh, *params).stdout.strip()
+
+
+class Mobile(threading.Thread):
+    @classmethod
+    def new(cls, mobiles, save_dir: pathlib.Path, line: cli.Line):
+        result = cmd.run('adb', 'devices')
+        for line in result.stdout.splitlines()[1:]:
+            try:
+                sn, _ = line.split()
+            except ValueError:
+                pass
+            else:
+                if sn and sn not in mobiles:
+                    # The SN is new and the device is in recovery
+                    mobile = cls(sn, save_dir, line)
+                    cls._mobiles.add(mobile)
+                    mobile.start()
+                    return mobile
+        raise NoDevice()
+
+    def __init__(self, serial_number: str, res: pathlib.Path, jsons: pathlib.Path):
+        self.serial_number = serial_number
+        self.adb = Adb(serial_number)
+        self.props = self._get_properties()
+        self.model = self.props['ro.product.model']
+        self.manufacturer = self.props['ro.product.manufacturer']
+        self.imei = None
+        self.closed = False
+        self.dir = res / self.model
+        self.events = []
+        super().__init__(daemon=True)
+        hid = Naming.hid('Smartphone', self.manufacturer, self.model, self.serial_number)
+        self.json_path = jsons / (hid + '.json')
+        self.save_json()
+        self._state_iter = iter(self.States)
+        self._state = next(self._state_iter)
+        self._progress = None  # type: Union[ProgressiveCmd, None]
+        self._error = None
+        self.components = []
+
+    def _get_properties(self) -> Dict[str, object]:
+        properties = self.adb.shell('getprop').replace('[', '').replace(']', '')
+        return yaml.load(properties)
+
+    @classmethod
+    def from_recovery(cls, snapshot: pathlib.Path, line: cli.Line):
+        """Starts processing a new mobile that is in recovery."""
+
+
+class Display():
+    def __init__(self, adb: Adb) -> None:
+        display_info = text.grep(adb.dumpsys, 'PhysicalDisplayInfo')
+        self.resolution_width, self.resolution_height, self.refresh_rate, _internal_density, \
+        self.density_width, self.density_height, *_ = text.numbers(display_info)
+
+        self.size = math.sqrt(
+            (self.resolution_width / self.density_width) ** _internal_density +
+            (self.resolution_height / self.density_height) ** _internal_density
+        )
+        """Size. From https://stackoverflow.com/a/19446138/2710757."""
+        self.technology = None
+        self.contrast_ratio = None
+        self.touchable = True
+
+
+class Processor:
+    def __init__(self, adb: Adb) -> None:
+        self.cores = len(tuple(text.numbers(adb.shell('ls', '/sys/devices/system/cpu'))))
+
+
+class RamModule:
+    def __init__(self, adb: Adb) -> None:
+        super().__init__()
+        meminfo = adb.shell('cat', '/proc/meminfo')
+        # Ram is in KB
+        self.total = next(text.numbers(text.grep(meminfo, 'MemTotal'))) // 1000
+
+
+class GraphicCard:
+    def __init__(self, adb: Adb) -> None:
+        super().__init__()
+        gpu = text.grep(adb.dumpsys, 'GLES:')
+        self.manufacturer, self.model, *_ = gpu.split(', ')
+
+
+class DataStorage:
+    def __init__(self, adb: Adb) -> None:
+        self.size = next(text.numbers(text.grep(adb.dumpsys, 'System Size:'))) // (1 * 10) ^ 6
+
+
+class NetworkAdaptor:
+
+    def __init__(self, adb: Adb) -> None:
+        self.macs = {
+            next(text.macs(text.grep(adb.shell('ip', 'addr', 'show'), 'link/ether')))
+        }
+        self.bluetooth_mac = adb.shell('settings get secure bluetooth_address')
+
+
+class Battery:
+    def __init__(self, adb: Adb) -> None:
+        props = adb.shell('dumpsys', 'battery')
+        props = yaml.load(props)['Current Battery Service state']
+        self.wireless = props['Wireless powered']
+        self.status = props['status']
+        self.health = props['health']
+        self.voltage = props['voltage']
+        self.technology = props['technology']
+        self.charge_counter = props['Charge counter']
+        self.size = next(
+            text.numbers(text.grep(adb.dumpsys, 'Estimated battery capacity:')))  # mAh
+
+
+class Camera:
+
+    def __init__(self, *args) -> None:
+        pass
+
+    def new(self, adb: Adb):
+        for model in text.grep(adb.dumpsys, 'camera-name'):
+            video = next(text.grep(adb.dumpsys, 'video-size-values'),
+                         text.grep(adb.dumpsys, 'preview-size-values'))
+            v_height, v_width, *_ = text.numbers(video)
+            cam = Camera(model=model,
+                         height=next(text.grep(adb.dumpsys, 'raw-height')),
+                         width=next(text.grep(adb.dumpsys, 'raw-width')),
+                         focal_length=next(text.grep(adb.dumpsys, 'focal-length')),
+                         video_height=v_height,
+                         video_width=v_width
+                         )
 
 
 class Mobile(threading.Thread):
