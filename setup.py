@@ -1,5 +1,12 @@
 from setuptools import find_packages, setup
 
+
+def requires(extra=''):
+    with open('requirements{}.txt'.format(
+            '_' + extra if extra else '')) as fh:
+        return fh.read().split()
+
+
 with open('README.md') as f:
     long_description = f.read()
 
@@ -13,18 +20,9 @@ setup(
     author_email='x.bustamante@ereuse.org',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    install_requires=[
-        'blessed',
-        'colorama',
-        'click >= 6.0',
-        'ereuse-utils[cli, naming]>=0.4.0b20'
-    ],
-    setup_requires=[
-        'pytest-runner'
-    ],
-    tests_require=[
-        'pytest'
-    ],
+    install_requires=requires(),
+    setup_requires=requires('setup'),
+    tests_require=requires('tests'),
     classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: Console',
