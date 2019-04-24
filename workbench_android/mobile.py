@@ -12,6 +12,7 @@ import ereuse_utils
 from ereuse_utils import cmd
 from ereuse_utils.naming import Naming
 
+from workbench_android.tools import parse_strings
 from workbench_android.progressive_cmd import ProgressiveCmd
 
 
@@ -164,24 +165,41 @@ class Mobile(threading.Thread):
                     return
             sleep(1)
 
+    def umount(self, shell, block):
+        cmd.run(*shell, 'umount', block)
+
+    def wait_for_recovery(self):
+        """
+        Reboot into recovery mode and waits for 5 seconds if device is already in recovery mode.
+
+        :return:
+        """
+        adb = 'timeout', '5', 'adb', '-s', self.serial_number
+
+        while True:
+            with suppress(subprocess.CalledProcessError):
+                state = cmd.run(*adb, 'get-state').stdout
+                if 'recovery' in state:
+                    return
+
+                cmd.run(*adb, 'reboot', 'recovery')
+                cmd.run(*adb, 'wait-for-recovery')
+
     def erase_data_partition(self):
         shell = 'adb', '-s', self.serial_number, 'shell'
-        i = 1
-        while True:
-            try:
-                sleep(1)
-                cmd.run(*shell, 'recovery', '--set_filesystem_encryption=off')
-                cmd.run(*shell, 'twrp', 'wipe', 'data')
-                sleep(1)
-                res = cmd.run(*shell, 'mount')
-                part = next(line.split()[0] for line in res.stdout.splitlines() if '/data' in line)
-            except (StopIteration, subprocess.CalledProcessError) as e:
-                i += 1
-                self._error = 'Data partition broken. Wiping again... ({}) ({})'.format(i, e)
-                sleep(5)
-            else:
-                self._error = None
-                break
+
+        self.wait_for_recovery()
+
+        partitions = parse_strings.get_partitions(cmd.run(*shell, 'mount').stdout)
+        if '/data' in partitions:
+            block = partitions['/data']
+
+        elif '/sdcard' in partitions:
+            block = partitions['/sdcard']
+
+        else:
+            raise Exception('No user partition found.')
+
         erasure = {
             'type': 'EraseBasic',
             'error': False,
@@ -190,7 +208,8 @@ class Mobile(threading.Thread):
             'steps': []
         }
         # todo check that dd fulfilled the entire partition
-        cmd.run(*shell, 'dd', 'if=/dev/zero', 'of={}'.format(part), check=False)
+        cmd.run(*shell, 'umount', block)
+        cmd.run(*shell, 'dd', 'if=/dev/zero', 'of={}'.format(block), check=False)
         cmd.run(*shell, 'twrp', 'wipe', 'data')
         erasure['endTime'] = datetime.datetime.now(datetime.timezone.utc)
         erasure['steps'].append({
