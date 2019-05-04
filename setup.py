@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 def requires(extra=''):
     with open('requirements{}.txt'.format(
-            '_' + extra if extra else '')) as fh:
+            '-' + extra if extra else '')) as fh:
         return fh.read().split()
 
 
@@ -40,5 +40,8 @@ setup(
         'console_scripts': [
             'wa = workbench_android.main:main',
         ],
+    },
+    extras_require={
+        'docs': requires('docs')
     },
 )
