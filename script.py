@@ -1,55 +1,25 @@
-import subprocess
+import sys
+import time
+import logging
 
+from pathlib import Path
 
-def get_data_partition(_sn):
-    """Get data partiton.
-    Args:
-        _sn (str): Serial number.
-    Returns:
-        str: Partition path.
-        """
+from workbench_android import mobile
 
-    command = 'adb -s {serial_number} shell mount' \
-        .format(serial_number=_sn)
+# noinspection SpellCheckingInspection
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    p = subprocess.Popen(
-        command.split(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True
-    )
-    while True:
-        sn_line = p.stdout.readline()
-        if not sn_line:
-            break
+handler = logging.StreamHandler(stream=sys.stdout)
+handler.setFormatter(formatter)
 
-        if '/data' in sn_line:
-            return sn_line.split()[0]
+res = Path('resources')
+out = Path('outputs')
+m = mobile.Mobile('21f4c3ce', res, out, [handler])
 
+# Erase step.
+# m.set_state(mobile.State.RECOVERY)
+# result = m.erase_data_partition()
 
-def erase_partition(partition, _sn):
-    """Get data partiton.
-    Args:
-        _sn (str): Serial number.
-    Returns:
-        str: Partition path.
-        """
+print(m.state())
 
-    command_first = 'adb -s {serial_number}' \
-        .format(serial_number=_sn)
-
-    command_end = 'shell dd if=/dev/zero of={partition}' \
-        .format(partition=partition)
-
-    p = subprocess.Popen(
-        command_first.split() + command_end.split(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True
-    )
-
-
-if __name__ == '__main__':
-    serial_number = "21f4c3ce"
-    partition = get_data_partition(serial_number)
-    erased = erase_partition(partition, serial_number)

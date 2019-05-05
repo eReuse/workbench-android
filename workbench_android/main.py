@@ -60,12 +60,12 @@ def main(res: pathlib.Path, jsons: pathlib.Path):
                 })
             # Update mobiles
             for i, info in enumerate(mobiles, start=4):
-                state, increment, error = info['mobile'].status()
+                state, increment, error = info['mobile'].current_step()
                 if error:
                     with term.location(0, i):
                         print('{}{}{}'.format(colorama.Fore.RED, error, colorama.Style.RESET_ALL))
                 elif info['last_state'] == state:
-                    if state != next(reversed(Mobile.States)):  # Last state
+                    if state != next(reversed(Mobile.LongStates)):  # Last state
                         if increment:
                             with term.location(0, i):
                                 info['bar'].update(increment)

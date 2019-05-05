@@ -1,7 +1,7 @@
 def get_partitions(mount_string: str) -> dict:
     """
     Parses the output of `mount` command and return a dictionary with
-    the mountpoint as key and block path has value.
+    the mount point as key and block path has value.
 
     :param mount_string:
     :return:
@@ -16,3 +16,29 @@ def get_partitions(mount_string: str) -> dict:
             partitions[point] = device
 
     return partitions
+
+
+def get_devices(string) -> dict:
+    devices = {}
+    for line in string.split('\n'):
+        if line == '':
+            continue
+
+        serial, status, *_ = line.split()
+
+        if len(serial) != 8:
+            continue
+
+        devices[serial] = status
+
+    return devices
+
+
+def simple_string(string: str) -> str:
+    """
+    Just strips \n characters.
+
+    :param str string:
+    :return: The string parsed.
+    """
+    return string.strip()

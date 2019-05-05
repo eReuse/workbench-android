@@ -1,14 +1,17 @@
-import datetime
 import json
+import time
 import pathlib
-import subprocess
+import logging
+import datetime
 import threading
-from contextlib import suppress
+import subprocess
+
 from enum import Enum
-from time import sleep
-from typing import Set, Tuple, Union
+from contextlib import suppress
+from typing import Set, Tuple, Union, List
 
 import ereuse_utils
+
 from ereuse_utils import cmd
 from ereuse_utils.naming import Naming
 
@@ -16,55 +19,139 @@ from workbench_android.tools import parse_strings
 from workbench_android.progressive_cmd import ProgressiveCmd
 
 
+class DeviceNotConnected(Exception):
+    """ Raised when device has ben not found. """
+
+
+class State(Enum):
+    UNAUTHORIZED = 'unauthorized'
+    DEFAULT = 'device'
+    RECOVERY = 'recovery'
+    # noinspection SpellCheckingInspection
+    FLASH = 'bootloader'
+    DISCONNECTED = 'off'
+
+
+class LongState(Enum):
+    Recovery = 'In recovery'
+    Erasing = 'Erasing'
+    # noinspection SpellCheckingInspection
+    WaitingSideload = 'Go to sideload'
+    InstallingOS = 'Installing the OS'
+    # noinspection SpellCheckingInspection
+    WaitSideloadAgain = 'Installed. Relaunch sideload to install Google Apps.'
+    # noinspection SpellCheckingInspection
+    InstallingGapps = 'Installing the Google Apps'
+    BootingIntoOS = 'Booting into OS... don\'t disconnect.'
+    Done = 'Done. Check everything works well.'
+
+
 class Mobile(threading.Thread):
     _mobiles = set()  # type: Set[Mobile]
 
-    class States(Enum):
-        Recovery = 'In recovery'
-        Erasing = 'Erasing'
-        WaitingSideload = 'Go to sideload'
-        InstallingOS = 'Installing the OS'
-        WaitSideloadAgain = 'Installed. Relaunch sideload to install Google Apps.'
-        InstallingGapps = 'Installing the Google Apps'
-        BootingIntoOS = 'Booting into OS... don\'t disconnect.'
-        Done = 'Done. Check everything works well.'
-
-    class Modes(Enum):
-        Recovery = 'recovery'
-        Sideload = 'sideload'
-        Device = 'device'
-
-        def in_recovery(self):
-            """Recovery englobes some states, like sideload."""
-            return self in {self.Recovery, self.Sideload}
-
-    def __init__(self, serial_number: str, res: pathlib.Path, jsons: pathlib.Path):
+    def __init__(self, serial_number: str, res: pathlib.Path,
+                 jsons: pathlib.Path, handlers: List[logging.Handler] = None):
+        # Set the serial number.
         self.serial_number = serial_number
+
+        # Define the default commands.
         self.adb = 'adb', '-s', self.serial_number
-        getprop = self.adb + ('shell', 'getprop')
-        self.model = cmd.run(*getprop, 'ro.product.model').stdout.strip()
-        self.manufacturer = cmd.run(*getprop, 'ro.product.manufacturer').stdout.strip()
-        self.imei = None
-        self.closed = False
-        self.dir = res / self.model
+        self.shell = *self.adb, 'shell'
+        self.getprop = *self.shell, 'getprop'
+
+        # Default variables
         self.events = []
+        self.closed = False
+        self._resources = res
+
+        # Create a logger.
+        self.logger = logging.getLogger('{}-{}'.format(
+            self.__class__.__name__, self.serial_number))
+        self.logger.handlers = handlers or self.logger.handlers
+        self.logger.setLevel(logging.DEBUG)
+
+        # Initiate Thread class.
         super().__init__(daemon=True)
-        hid = Naming.hid('Smartphone', self.manufacturer, self.model, self.serial_number)
+        self._thread_event = threading.Event()
+
+        # Check if device is connected.
+        if not self.is_available(timeout=60):
+            raise DeviceNotConnected(self.serial_number)
+
+        # Get properties.
+        # noinspection SpellCheckingInspection
+        self.imei = None
+        self.model = self.get_model()
+        self.manufacturer = self.get_manufacturer()
+        hid = Naming.hid(
+            'Smartphone', self.manufacturer, self.model, self.serial_number)
         self.json_path = jsons / (hid + '.json')
         self.save_json()
-        self._state_iter = iter(self.States)
-        self._state = next(self._state_iter)
+
+        # self._state_iter = iter(LongState)
+        # self._state = next(self._state_iter)
         self._progress = None  # type: Union[ProgressiveCmd, None]
         self._error = None
 
-    def status(self) -> Tuple[States, Union[int, None], Union[str, None]]:
-        """Returns information of the process of this mobile.
+    def is_available(self, timeout=120):
+        start_time = time.time()
+        while time.time() < start_time + timeout:
+            if self.state() in [State.DEFAULT, State.RECOVERY]:
+                return True
+
+            time.sleep(1)
+
+        return False
+
+    def is_state(self, status):
+        """
+        Waits to be in the State.
+
+        :param State status: State enum.
+        :return: Returns the return code of the command.
+        :rtype: int
+        """
+        self.logger.debug('Waiting for state \'{}\'.'.format(status.value))
+        proc = cmd.run(*self.adb, 'wait-for-{}'.format(status.value))
+        self.logger.debug('Device found in state {}.'.format(status.value))
+        return proc.returncode
+
+    def get_auth(self):
+        """
+        Resent the authorization prompt to the device.
+
+        :return: Returns True if accepted.
+        :rtype: bool
+        """
+        cmd.run(*self.adb, 'reconnect', 'offline')
+
+    def state(self):
+        """
+        Returns the current phone status.
+
+        :return: The current status of the phone.
+        :rtype: State
+        """
+        proc = cmd.run(*self.adb, 'get-state', check=False)
+
+        if proc.returncode != 0:
+            # Todo: Detect if is Unauthorized or disconnected.
+            self.logger.debug('Device not detected or unauthorized.')
+            return State.DISCONNECTED
+
+        return State(proc.stdout.strip())
+
+    def current_step(self) -> Tuple[LongState, Union[int, None],
+                                    Union[str, None]]:
+        """
+        Returns information of the process of this mobile.
 
         Returns the state and, if the state is a progress,
         the number steps performed from the last time this method
         was executed.
         """
-        return self._state, self._progress.increment() if self._progress else None, self._error
+        return self._state, self._progress.increment() \
+            if self._progress else None, self._error
 
     def run(self):
         try:
@@ -74,20 +161,20 @@ class Mobile(threading.Thread):
 
     def _run(self):
         """Processes the device, erasing it, installing the OS, etc."""
-        # todo check if adb devices -- recovery or device?
+        self.next_state()  # Erase step.
 
-        # Initial state is Recovery
-
-        self.next_state()  # Erasing
+        self.set_state(State.RECOVERY)
         self.erase_data_partition()
 
-        self.next_state()  # Waiting for sideload
-        self.wait_until_mode(self.Modes.Sideload)
+        self.next_state()  # Flash OS.
+        self.install_os()
+        self.set_state(State.FLASH)
 
         self.next_state()  # Installing OS
         start = datetime.datetime.now(datetime.timezone.utc)
         os = 'samsung.zip'
-        self._progress = ProgressiveCmd(*self.adb, 'sideload', self.dir / os,
+        self._progress = ProgressiveCmd(*self.adb, 'sideload',
+                                        self._resources / os,
                                         stdout=subprocess.PIPE,
                                         number_chars=2,
                                         read=10)
@@ -100,27 +187,30 @@ class Mobile(threading.Thread):
         })
 
         self.next_state()
-        self.wait_until_mode(self.Modes.Recovery)
-        self.wait_until_mode(self.Modes.Sideload)
+        self.set_state(State.RECOVERY)
 
         self.next_state()  # Installing gapps
-        self._progress = ProgressiveCmd(*self.adb, 'sideload', self.dir / 'gapps.zip',
+        self._progress = ProgressiveCmd(*self.adb, 'sideload',
+                                        self._resources / 'gapps.zip',
                                         stdout=subprocess.PIPE,
                                         number_chars=2,
                                         read=10)
         self._progress.run()
 
-        self.wait_until_mode(self.Modes.Recovery)
+        self.set_state(State.RECOVERY)
         self.next_state()  # Booting into OS
         cmd.run(*self.adb, 'reboot')
-        self.wait_until_mode(self.Modes.Recovery)
+        self.set_state(State.RECOVERY)
         self.save_json()
-        self.wait_until_mode(self.Modes.Device)
+        self.set_state(State.DEFAULT)  # Default? OS installation will start
         # get imei from https://android.stackexchange.com/a/194514
         # only works when main OS is already booting
-        self.imei = cmd.run(*self.adb, 'shell', 'service', 'call', 'iphonesubinfo', 1, '|',
-                            'toybox', 'cut', '-d', "'", '-f2', '|', 'toybox', 'grep', '-Eo',
-                            "'[0-9]'", '|', 'toybox', 'xargs', '|', 'toybox', 'sed', "'s/\ //g'")
+        self.imei = cmd.run(
+            *self.adb, 'shell', 'service', 'call', 'iphonesubinfo', 1, '|',
+            'toybox', 'cut', '-d', "'", '-f2', '|', 'toybox', 'grep', '-Eo',
+            "'[0-9]'", '|', 'toybox', 'xargs', '|', 'toybox', 'sed',
+            "'s/\ //g'")
+
         self.closed = True
         self.save_json()
         self.next_state()  # Done
@@ -129,68 +219,50 @@ class Mobile(threading.Thread):
         self._state = next(self._state_iter)
         self._progress = None
 
-    @classmethod
-    def factory_from_recovery(cls, res: pathlib.Path, jsons: pathlib.Path):
-        """Starts processing a new mobile that is in recovery."""
-        result = cmd.run('adb', 'devices')
-        for line in result.stdout.splitlines()[1:]:
-            try:
-                sn, mode = line.split()
-                mode = cls.Modes(mode)
-            except ValueError:
-                pass
-            else:
-                if sn and sn not in cls._mobiles and mode.in_recovery():
-                    # The SN is new and the device is in recovery
-                    mobile = cls(sn, res, jsons)
-                    cls._mobiles.add(mobile)
-                    mobile.start()
-                    return mobile
-        raise NoDevice()
-
-    def device_found(self, out: str):
-        raise NotImplementedError()  # todo
-
-    @classmethod
-    def get_serial_number(cls, out: str):
-        raise NotImplementedError()  # todo
-
-    def wait_until_mode(self, mode: Modes):
-        """Blocks until it gets the actual mode of the device"""
-        while True:
-            with suppress(ValueError, StopIteration):
-                r = cmd.run('adb', 'devices')
-                m = next(l.split()[1] for l in r.stdout.splitlines() if self.serial_number in l)
-                if mode == self.Modes(m):
-                    return
-            sleep(1)
-
-    def umount(self, shell, block):
-        cmd.run(*shell, 'umount', block)
-
-    def wait_for_recovery(self):
+    def factory_wipe(self):
         """
-        Reboot into recovery mode and waits for 5 seconds if device is already in recovery mode.
+        Remove all the data and return to the factory image.
+
+        :return: Returns the error code.
+        :rtype: int
+        """
+        self.is_state(State.RECOVERY)
+        proc = cmd.run(self.adb, 'shell', 'recovery', '--wipe_data')
+        return proc.returncode
+
+    def unmount(self, block):
+        """
+        Unmount a device or partition.
+
+        :param block:
+        :return:
+        """
+        # noinspection SpellCheckingInspection
+        cmd.run(self.adb, 'shell', 'umount', block)
+
+    def set_state(self, mode: State, timeout=60):
+        """
+        Reboot into recovery mode and waits for 5 seconds if device is
+        already in recovery mode.
 
         :return:
         """
-        adb = 'timeout', '5', 'adb', '-s', self.serial_number
+        adb = 'timeout', str(timeout), *self.adb
 
         while True:
             with suppress(subprocess.CalledProcessError):
                 state = cmd.run(*adb, 'get-state').stdout
-                if 'recovery' in state:
+                if mode.value in state:
                     return
 
-                cmd.run(*adb, 'reboot', 'recovery')
-                cmd.run(*adb, 'wait-for-recovery')
+                cmd.run(*adb, 'reboot', mode.value)
+                wait_for = cmd.run(*adb, 'wait-for-{}'.format(mode.value))
 
     def erase_data_partition(self):
-        shell = 'adb', '-s', self.serial_number, 'shell'
+        shell = *self.adb, 'shell'
 
-        self.wait_for_recovery()
-
-        partitions = parse_strings.get_partitions(cmd.run(*shell, 'mount').stdout)
+        partitions = parse_strings.get_partitions(
+            cmd.run(*shell, 'mount').stdout)
         if '/data' in partitions:
             block = partitions['/data']
 
@@ -207,10 +279,12 @@ class Mobile(threading.Thread):
             'startTime': datetime.datetime.now(datetime.timezone.utc),
             'steps': []
         }
-        # todo check that dd fulfilled the entire partition
-        cmd.run(*shell, 'umount', block)
+
+        self.unmount(block)
+        # Todo: Check that dd fulfilled the entire partition.
         cmd.run(*shell, 'dd', 'if=/dev/zero', 'of={}'.format(block), check=False)
         cmd.run(*shell, 'twrp', 'wipe', 'data')
+
         erasure['endTime'] = datetime.datetime.now(datetime.timezone.utc)
         erasure['steps'].append({
             'type': 'StepRandom',
@@ -220,11 +294,26 @@ class Mobile(threading.Thread):
         })
         self.events.append(erasure)
 
+    def install_os(self):
+        self.is_state(State.FLASH)
+
+        erasure = {
+            'type': 'EraseBasic',
+            'error': False,
+            'zeros': False,
+            'startTime': datetime.datetime.now(datetime.timezone.utc),
+            'steps': []
+        }
+        # Todo: Install new OS.
+        self.unmount(block)
+        self.events.append(erasure)
+
     def save_json(self):
         with self.json_path.open('w') as f:
+            # noinspection SpellCheckingInspection
             json.dump({
                 'device': {
-                    'type': 'Smartphone',  # todo check for tablets!
+                    'type': 'Smartphone',  # Todo: Implementation for tablets.
                     'model': self.model,
                     'manufacturer': self.manufacturer,
                     'serialNumber': self.serial_number,
@@ -233,6 +322,30 @@ class Mobile(threading.Thread):
                 'closed': self.closed,
                 'events': self.events
             }, f, cls=ereuse_utils.JSONEncoder, indent=2, sort_keys=True)
+
+    def get_model(self):
+        """
+        Get the current model name of the device.
+
+        :return: Model name.
+        :rtype: str
+        """
+        try:
+            return parse_strings.simple_string(
+                cmd.run(*self.getprop, 'ro.product.model').stdout)
+
+        except subprocess.CalledProcessError:
+            raise DeviceNotConnected('Device \'{}\' not connected.'.format(
+                self.serial_number))
+
+    def get_manufacturer(self):
+        try:
+            return parse_strings.simple_string(
+                cmd.run(*self.getprop, 'ro.product.manufacturer').stdout)
+
+        except subprocess.CalledProcessError:
+            raise DeviceNotConnected('Device \'{}\' not connected.'.format(
+                self.serial_number))
 
     def __hash__(self) -> int:
         return self.serial_number.__hash__()
@@ -267,7 +380,7 @@ class Fastboot(threading.Thread):
                     stderr=subprocess.DEVNULL,
                     check=True
                 )
-            sleep(2)
+            time.sleep(2)
 
 
 class NoDevice(Exception):
