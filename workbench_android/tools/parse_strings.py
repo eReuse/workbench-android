@@ -42,3 +42,13 @@ def simple_string(string: str) -> str:
     :return: The string parsed.
     """
     return string.strip()
+
+
+def uptime(string):
+    """
+    Parses the output of `cat /proc/uptime`.
+
+    :param str string:
+    :return: Parsed tuple ints.
+    """
+    return [float(value) for value in string.strip().split()]

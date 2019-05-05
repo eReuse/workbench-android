@@ -1,5 +1,4 @@
 import sys
-import time
 import logging
 
 from pathlib import Path
@@ -17,9 +16,17 @@ res = Path('resources')
 out = Path('outputs')
 m = mobile.Mobile('21f4c3ce', res, out, [handler])
 
-# Erase step.
-# m.set_state(mobile.State.RECOVERY)
-# result = m.erase_data_partition()
+# Todo: Root recovery.
 
-print(m.state())
+# Erase data partitions.
+m.erase_data_partition()
 
+# Reformat partitions and reboot.
+m.format_data()
+m.reboot(mobile.State.RECOVERY)
+
+# Todo: Install new OS.
+
+# Todo: Install apps.
+
+m.save_json()

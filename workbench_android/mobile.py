@@ -8,7 +8,7 @@ import subprocess
 
 from enum import Enum
 from contextlib import suppress
-from typing import Set, Tuple, Union, List
+from typing import Set, Tuple, Union, List, Dict
 
 import ereuse_utils
 
@@ -21,6 +21,10 @@ from workbench_android.progressive_cmd import ProgressiveCmd
 
 class DeviceNotConnected(Exception):
     """ Raised when device has ben not found. """
+
+
+class ErasureFailed(Exception):
+    """ When a erasure step has been failed. """
 
 
 class State(Enum):
@@ -86,7 +90,6 @@ class Mobile(threading.Thread):
         hid = Naming.hid(
             'Smartphone', self.manufacturer, self.model, self.serial_number)
         self.json_path = jsons / (hid + '.json')
-        self.save_json()
 
         # self._state_iter = iter(LongState)
         # self._state = next(self._state_iter)
@@ -230,6 +233,17 @@ class Mobile(threading.Thread):
         proc = cmd.run(self.adb, 'shell', 'recovery', '--wipe_data')
         return proc.returncode
 
+    def reboot(self, state=None):
+        """
+        Reboot device, if no state is give, default state will be set.
+
+        :param state: State
+        :return: None
+        """
+        state = state or State.DEFAULT
+        self.logger.debug('Rebooting into \'{}\'.'.format(state.value))
+        cmd.run(*self.adb, 'reboot', state.value)
+
     def unmount(self, block):
         """
         Unmount a device or partition.
@@ -238,7 +252,7 @@ class Mobile(threading.Thread):
         :return:
         """
         # noinspection SpellCheckingInspection
-        cmd.run(self.adb, 'shell', 'umount', block)
+        cmd.run(*self.shell, 'umount', block)
 
     def set_state(self, mode: State, timeout=60):
         """
@@ -258,41 +272,87 @@ class Mobile(threading.Thread):
                 cmd.run(*adb, 'reboot', mode.value)
                 wait_for = cmd.run(*adb, 'wait-for-{}'.format(mode.value))
 
-    def erase_data_partition(self):
-        shell = *self.adb, 'shell'
+    def uptime(self):
+        """
+        Returns the uptime of the device.
 
-        partitions = parse_strings.get_partitions(
-            cmd.run(*shell, 'mount').stdout)
-        if '/data' in partitions:
-            block = partitions['/data']
+        :return:
+        """
+        return parse_strings.uptime(
+            cmd.run(*self.shell, 'cat', '/proc/uptime').stdout)
 
-        elif '/sdcard' in partitions:
-            block = partitions['/sdcard']
+    def erase_data_partition(self, steps=1):
+        block = None
 
-        else:
-            raise Exception('No user partition found.')
+        while not block:
+            partitions = self.get_partitions()
+            if '/data' in partitions:
+                block = partitions['/data']
+                self.logger.debug(
+                    'Data partition found, mount point at \'{}\''.format(block))
+
+            else:
+                uptime, _ = self.uptime()
+                if uptime < 10:
+                    self.logger.debug('Too early to find data partition.')
+                    time.sleep(1)
+                    continue
+
+                raise Exception('No user partition found.')
 
         erasure = {
             'type': 'EraseBasic',
             'error': False,
-            'zeros': False,
-            'startTime': datetime.datetime.now(datetime.timezone.utc),
+            'zeros': True,
+            # 'startTime': datetime.datetime.now(datetime.timezone.utc),
+            'startTime': time.time(),
+            'endTime': None,
             'steps': []
         }
 
+        # Unmount block.
         self.unmount(block)
         # Todo: Check that dd fulfilled the entire partition.
-        cmd.run(*shell, 'dd', 'if=/dev/zero', 'of={}'.format(block), check=False)
-        cmd.run(*shell, 'twrp', 'wipe', 'data')
 
-        erasure['endTime'] = datetime.datetime.now(datetime.timezone.utc)
-        erasure['steps'].append({
-            'type': 'StepRandom',
-            'startTime': erasure['startTime'],
-            'endTime': erasure['endTime'],
-            'error': False
-        })
+        for _ in range(steps):
+            # Erase data.
+            self.logger.debug('Erasing block \'{}\'.'.format(block))
+            step_event = {
+                'type': 'StepZeros',
+                'startTime': time.time(),
+                'endTime': None,
+                'error': False
+            }
+
+            proc = cmd.run(*self.shell, 'dd',
+                           'if=/dev/zero',
+                           'of={}'.format(block),
+                           check=False)
+
+            step_event['endTime'] = time.time()
+            if proc.returncode != 0:
+                step_event['error'] = True
+
+            erasure['steps'].append(step_event)
+
+        # Re-format.
+        self.format_data()
+
+        # erasure['endTime'] = datetime.datetime.now(datetime.timezone.utc)
+        erasure['endTime'] = time.time()
         self.events.append(erasure)
+
+    def format_data(self):
+        """
+        Send twrp command to format data partition.
+
+        :return:
+        """
+        self.logger.debug('Reformat partitions.')
+        proc = cmd.run(*self.shell, 'twrp', 'wipe', 'data', check=False)
+
+        if proc.returncode != 0:
+            raise ErasureFailed('Failed to reformat default data partitions')
 
     def install_os(self):
         self.is_state(State.FLASH)
@@ -346,6 +406,10 @@ class Mobile(threading.Thread):
         except subprocess.CalledProcessError:
             raise DeviceNotConnected('Device \'{}\' not connected.'.format(
                 self.serial_number))
+
+    def get_partitions(self) -> dict:
+        return parse_strings.get_partitions(
+            cmd.run(*self.shell, 'mount').stdout)
 
     def __hash__(self) -> int:
         return self.serial_number.__hash__()
