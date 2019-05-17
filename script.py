@@ -14,17 +14,21 @@ handler.setFormatter(formatter)
 
 res = Path('resources')
 out = Path('outputs')
-m = mobile.Mobile('21f4c3ce', res, out, [handler])
+m = mobile.Mobile('12312312', res, out, [handler])
 
-# Todo: Root recovery.
+# m.set_state(mobile.State.FLASH)
+# m.flash_recovery()
 
 # Erase data partitions.
+m.set_state(mobile.State.RECOVERY)
+m.wait_for(mobile.State.RECOVERY)
 m.erase_data_partition()
 
 # Reformat partitions and reboot.
-m.format_data()
-m.reboot(mobile.State.RECOVERY)
+# m.format_data()
+# m.reboot(mobile.State.RECOVERY)
 
+# m.is_state(mobile.State.RECOVERY)
 # Todo: Install new OS.
 
 # Todo: Install apps.

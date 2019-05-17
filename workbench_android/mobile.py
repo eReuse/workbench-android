@@ -7,8 +7,8 @@ import threading
 import subprocess
 
 from enum import Enum
-from contextlib import suppress
 from typing import Set, Tuple, Union, List, Dict
+from contextlib import suppress
 
 import ereuse_utils
 
@@ -19,11 +19,15 @@ from workbench_android.tools import parse_strings
 from workbench_android.progressive_cmd import ProgressiveCmd
 
 
-class DeviceNotConnected(Exception):
+class ImageNotFoundException(Exception):
+    """ Can not found the image on the module resource folder. """
+
+
+class DeviceNotConnectedException(Exception):
     """ Raised when device has ben not found. """
 
 
-class ErasureFailed(Exception):
+class ErasureFailedException(Exception):
     """ When a erasure step has been failed. """
 
 
@@ -62,11 +66,12 @@ class Mobile(threading.Thread):
         self.adb = 'adb', '-s', self.serial_number
         self.shell = *self.adb, 'shell'
         self.getprop = *self.shell, 'getprop'
+        # noinspection SpellCheckingInspection
+        self.flash = 'heimdall'
 
         # Default variables
         self.events = []
         self.closed = False
-        self._resources = res
 
         # Create a logger.
         self.logger = logging.getLogger('{}-{}'.format(
@@ -80,7 +85,7 @@ class Mobile(threading.Thread):
 
         # Check if device is connected.
         if not self.is_available(timeout=60):
-            raise DeviceNotConnected(self.serial_number)
+            raise DeviceNotConnectedException(self.serial_number)
 
         # Get properties.
         # noinspection SpellCheckingInspection
@@ -95,29 +100,59 @@ class Mobile(threading.Thread):
         # self._state = next(self._state_iter)
         self._progress = None  # type: Union[ProgressiveCmd, None]
         self._error = None
+        self._resources = res / self.model
 
     def is_available(self, timeout=120):
         start_time = time.time()
+
+        auth_spam = 30  # Spam the message every 30 seconds.
+        auth_quiet = 0
         while time.time() < start_time + timeout:
             if self.state() in [State.DEFAULT, State.RECOVERY]:
                 return True
+
+            elif auth_spam == auth_spam:
+                self.get_auth()
+                auth_quiet = 0
+
+            else:
+                auth_quiet += 1
 
             time.sleep(1)
 
         return False
 
-    def is_state(self, status):
+    def wait_for(self, status):
         """
         Waits to be in the State.
 
         :param State status: State enum.
         :return: Returns the return code of the command.
         :rtype: int
+
         """
         self.logger.debug('Waiting for state \'{}\'.'.format(status.value))
-        proc = cmd.run(*self.adb, 'wait-for-{}'.format(status.value))
+        try:
+            if status == State.FLASH:
+                proc = self._heimdall_detect()
+
+            else:
+                proc = cmd.run(*self.adb, 'wait-for-{}'.format(status.value))
+
+        except subprocess.CalledProcessError:
+            pass
+
         self.logger.debug('Device found in state {}.'.format(status.value))
         return proc.returncode
+
+    def _heimdall_detect(self):
+        """
+        Detect if heimdall find any device.
+
+        This must be in a separated class for Samsung mobiles.
+        :return:
+        """
+        return cmd.run(*self.flash, 'print-pit', '--no-reboot')
 
     def get_auth(self):
         """
@@ -229,7 +264,7 @@ class Mobile(threading.Thread):
         :return: Returns the error code.
         :rtype: int
         """
-        self.is_state(State.RECOVERY)
+        self.wait_for(State.RECOVERY)
         proc = cmd.run(self.adb, 'shell', 'recovery', '--wipe_data')
         return proc.returncode
 
@@ -254,23 +289,21 @@ class Mobile(threading.Thread):
         # noinspection SpellCheckingInspection
         cmd.run(*self.shell, 'umount', block)
 
-    def set_state(self, mode: State, timeout=60):
+    def set_state(self, mode: State):
         """
         Reboot into recovery mode and waits for 5 seconds if device is
         already in recovery mode.
 
         :return:
         """
-        adb = 'timeout', str(timeout), *self.adb
+        adb = 'timeout', '10', *self.adb
 
-        while True:
-            with suppress(subprocess.CalledProcessError):
-                state = cmd.run(*adb, 'get-state').stdout
-                if mode.value in state:
-                    return
+        with suppress(subprocess.CalledProcessError):
+            state = cmd.run(*adb, 'get-state').stdout
+            if mode.value in state:
+                return
 
-                cmd.run(*adb, 'reboot', mode.value)
-                wait_for = cmd.run(*adb, 'wait-for-{}'.format(mode.value))
+            cmd.run(*adb, 'reboot', mode.value)
 
     def uptime(self):
         """
@@ -289,7 +322,8 @@ class Mobile(threading.Thread):
             if '/data' in partitions:
                 block = partitions['/data']
                 self.logger.debug(
-                    'Data partition found, mount point at \'{}\''.format(block))
+                    'Data partition found, mount point at \'{}\''.format(
+                        block))
 
             else:
                 uptime, _ = self.uptime()
@@ -352,21 +386,22 @@ class Mobile(threading.Thread):
         proc = cmd.run(*self.shell, 'twrp', 'wipe', 'data', check=False)
 
         if proc.returncode != 0:
-            raise ErasureFailed('Failed to reformat default data partitions')
+            raise ErasureFailedException(
+                'Failed to reformat default data partitions')
 
     def install_os(self):
-        self.is_state(State.FLASH)
+        self.wait_for(State.FLASH)
 
-        erasure = {
-            'type': 'EraseBasic',
-            'error': False,
-            'zeros': False,
-            'startTime': datetime.datetime.now(datetime.timezone.utc),
-            'steps': []
-        }
-        # Todo: Install new OS.
-        self.unmount(block)
-        self.events.append(erasure)
+        # erasure = {
+        #     'type': 'EraseBasic',
+        #     'error': False,
+        #     'zeros': False,
+        #     'startTime': datetime.datetime.now(datetime.timezone.utc),
+        #     'steps': []
+        # }
+        # # Todo: Install new OS.
+        # self.unmount(block)
+        # self.events.append(erasure)
 
     def save_json(self):
         with self.json_path.open('w') as f:
@@ -395,8 +430,8 @@ class Mobile(threading.Thread):
                 cmd.run(*self.getprop, 'ro.product.model').stdout)
 
         except subprocess.CalledProcessError:
-            raise DeviceNotConnected('Device \'{}\' not connected.'.format(
-                self.serial_number))
+            raise DeviceNotConnectedException(
+                'Device \'{}\' not connected.'.format(self.serial_number))
 
     def get_manufacturer(self):
         try:
@@ -404,12 +439,39 @@ class Mobile(threading.Thread):
                 cmd.run(*self.getprop, 'ro.product.manufacturer').stdout)
 
         except subprocess.CalledProcessError:
-            raise DeviceNotConnected('Device \'{}\' not connected.'.format(
-                self.serial_number))
+            raise DeviceNotConnectedException(
+                'Device \'{}\' not connected.'.format(self.serial_number))
 
     def get_partitions(self) -> dict:
         return parse_strings.get_partitions(
             cmd.run(*self.shell, 'mount').stdout)
+
+    def flash_recovery(self):
+        """
+        Flash the recovery partition with the image from resources.
+
+        Raises:
+            ImageNotFoundException: When the image of the recovery isn't
+                found.
+
+        :return:
+        """
+        recovery_file = self._resources / 'recovery.img'
+        flash_path = recovery_file.absolute().as_posix()
+
+        if not recovery_file.exists():
+            raise ImageNotFoundException(
+                'The path {} is empty.'.format(flash_path))
+
+        self.wait_for(State.FLASH)
+        try:
+            proc = cmd.run(*self.flash, 'flash', '--RECOVERY', flash_path)
+
+        except subprocess.CalledProcessError:
+            raise DeviceNotConnectedException(
+                'Device \'{}\' not connected.'.format(self.serial_number))
+
+        print(proc.stdout)
 
     def __hash__(self) -> int:
         return self.serial_number.__hash__()
@@ -439,7 +501,8 @@ class Fastboot(threading.Thread):
         while True:
             with suppress(subprocess.CalledProcessError):
                 subprocess.run(
-                    ('heimdall', 'flash', '--RECOVERY', str(self.res / 'recovery.img')),
+                    ('heimdall', 'flash', '--RECOVERY',
+                     str(self.res / 'recovery.img')),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=True

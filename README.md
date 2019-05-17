@@ -24,3 +24,7 @@ This project requires Python 3.5.3 or greater with pip.
 You can manually test Workbench Android by executing 
 `python3 tests/manual.py`. This mode emulates working with several
 Androids.
+
+
+# Credits
+This project uses an open-source tool called [Heimdall](https://glassechidna.com.au/heimdall/) to flash Samsung devices (to root them and install new OS).
